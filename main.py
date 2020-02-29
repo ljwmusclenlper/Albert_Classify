@@ -44,14 +44,15 @@ config.allow_soft_placement=True
 config.log_device_placement=True
 
 flags.DEFINE_string(
-    "bert_config_file", "albert_large_zh/albert_config_large.json",#BERT model配置文件
+    "bert_config_file", "albert_large_zh/albert_config_large.json",#Albert model配置文件
     "The config json file corresponding to the pre-trained BERT model. "
     "This specifies the model architecture.")
 
 flags.DEFINE_string("vocab_file", "albert_large_zh/vocab.txt",#字典文件
                     "The vocabulary file that the BERT model was trained on.")
 flags.DEFINE_string(
-    "init_checkpoint", "albert_large_zh/albert_model.ckpt",#预训练好的ALBERT模型
+    "init_checkpoint", "albert_large_zh/albert_model.ckpt",#预训练好的Albert模型，原先是研究所地质领域的预训练模型，
+                                                           #现在我重新用电影评论训练了一遍
     "Initial checkpoint (usually from a pre-trained BERT model).")
 
 flags.DEFINE_string("task_name", "multi_label", "The name of the task to train.")#任务，多标签训练
@@ -155,17 +156,18 @@ flags.DEFINE_integer(
 
 class RECnn(object):
     '''
-     FLAGS.sequence_length,#100
-            len(datamanager.relations),#53
-            FLAGS.embedding_dim,#50
+     FLAGS.sequence_length,
+            len(datamanager.relations),
+            FLAGS.embedding_dim,
             5,
-            list(map(int, FLAGS.filter_sizes.split(","))),#filter_sizes=3
-            FLAGS.num_filters,#128
-            FLAGS.l2_reg_lambda)#0.0001'''
+            list(map(int, FLAGS.filter_sizes.split(","))),
+            FLAGS.num_filters,
+            FLAGS.l2_reg_lambda)
+    '''
     def __init__(
         self,sequence_length, num_classes,
             embedding_size, filter_sizes, num_filters,embedded_chars_expanded,dropout_keep_prob,is_training=False):
-        #embedded_chars_expanded是扩张维度后的输入[32,128,768,1]
+            #embedded_chars_expanded是扩张维度后的输入[32,128,768,1]
             with tf.device('/gpu:0'):
                 
                 self.dropout_keep_prob = dropout_keep_prob
@@ -193,10 +195,10 @@ class RECnn(object):
                               'is_training':self.is_training}
                               #训练时true，
                         conv = self.bn(conv,c_,'{}-bn'.format(i))#[32,126,1,128]
-                        ###这里没有drop_out!
+
                         beta2 = tf.Variable(tf.truncated_normal([1], stddev=0.08), name='first-swish')
-                        x2 = tf.nn.bias_add(conv, b)#这里的b是一个常量。
-                        h = x2 * tf.nn.sigmoid(x2 * beta2)#gelu函数的变形gelu=x*sigmoid(1.702*x),只不过1.702没有写死
+                        x2 = tf.nn.bias_add(conv, b)
+                        h = x2 * tf.nn.sigmoid(x2 * beta2)#gelu函数的变形gelu=x*sigmoid(1.702*x),1.702没有写死
                         #输入[32,126,1,128]
                         for j in range(6):#6层CNNblock，每层是两个padding=same的卷积接一个SE通道加权
                             j_index +=1
@@ -243,7 +245,7 @@ class RECnn(object):
                 with tf.name_scope("output"):
                     W = tf.get_variable(
                         "W",
-                        shape=[num_filters_total, num_classes],#[768,20]标签数目
+                        shape=[num_filters_total, num_classes],#[768,35]标签数目 
                         initializer=tf.contrib.layers.xavier_initializer())
                     b = tf.Variable(tf.constant(0.1, shape=[num_classes]), name="b")
                     self.scores = tf.nn.xw_plus_b(self.h1, W, b, name="scores")
@@ -264,19 +266,11 @@ class RECnn(object):
         c_ = {'use_bias': True, 'is_training': self.is_training}
         conv1 = self.bn(conv1, c_, str(i) + '-conv1')#BN
         #经过第一个卷积层，形状不变[32,126,1,128]
-        ###这里又没drop_out!!!
-        #beta1 = tf.Variable(tf.truncated_normal([1], stddev=0.08), name='swish-beta-{}-1'.format(i))
+        beta1 = tf.Variable(tf.truncated_normal([1], stddev=0.08), name='swish-beta-{}-1'.format(i))
         
-        word_weight_shape=conv1.shape.as_list()
-        word_weight_shape[-1]=1
-        word_weight_shape=word_weight_shape[1:]
-                
-        beta1 = tf.Variable(tf.truncated_normal(shape=word_weight_shape, stddev=0.08), name='swish-beta-{}-1'.format(i))
-        #改进的,126维度上，即每个字上有个权重，conv1.shape[1]=126
         x1 = tf.nn.bias_add(conv1, b1)
         h1 = x1 * tf.nn.sigmoid(x1 * beta1)
-        #上面是self_Attention神操作,乘bate1的目的是，让特征图的值分布更加分散，进入sigmoid就能产生差距较大的权重，
-        #从而与自身对位相乘，进行self_Attention
+        # 相当于Gelu激活函数
         W2 = tf.get_variable(
             "W2_"+str(i),
             shape=[3, 1, num_filters, num_filters],
@@ -289,8 +283,8 @@ class RECnn(object):
             padding="SAME")
 
         conv2 = self.bn(conv2, c_, str(i) + '-conv2')
-        #自己改进的,126维度上，即每个字上有个权重，conv1.shape[1]=126
-        beta2 = tf.Variable(tf.truncated_normal(shape=word_weight_shape, stddev=0.08), name='swish-beta-{}-2'.format(i))
+    
+        beta2 = tf.Variable(tf.truncated_normal([1], stddev=0.08), name='swish-beta-{}-2'.format(i))
         x2 = tf.nn.bias_add(conv2, b2)
         h2 = x2 * tf.nn.sigmoid(x2 * beta2)
         #经过第二个self_Attention操作，形状不变[32,126,1,128]
@@ -308,7 +302,7 @@ class RECnn(object):
                                       initializer=tf.zeros_initializer)
             return x + bias
 
-        axis = list(range(len(x_shape) - 1))#意思就是取除了最后一个轴的所有维度【0，1，2】因为默认是[batch,宽,高,通道数]
+        axis = list(range(len(x_shape) - 1))#取除了最后一个轴的所有维度【0，1，2】因为默认是[batch,宽,高,通道数]
         beta = self._get_variable('bn_beta_{}'.format(name),
                                   params_shape,#形状[128]即通道数
                                   initializer=tf.zeros_initializer)
@@ -374,7 +368,6 @@ class RECnn(object):
                                               layer_name=layer_name + '_fully_connected2')           
             excitation = self.Sigmoid(excitation)
             #得到32*128个sigmoid值，相当于每个通道（128）的权重
-            ###这里是不是可以drop_out?
             excitation = tf.reshape(excitation, [-1, 1, 1, out_dim])
             #[32,1,1,128]
             scale = input_x * excitation#[32,126,1,128]*[32,1,1,128]#相当于在每个通道上加权重。
@@ -393,10 +386,6 @@ class RECnn(object):
     def Fully_connected(self, x, units, layer_name='fully_connected'):
         with tf.name_scope(layer_name):
             return tf.layers.dense(inputs=x, use_bias=True, units=units)#units=8=128/16
-            #这里就是WX+b,输出是8维的，
-            #由[?,128]变成[?,8]
-
-
 
 
 class InputExample(object):
@@ -463,13 +452,6 @@ class MultiLabelClassifyProcessor(DataProcessor):
 
     def __init__(self,FLAGS):
         label_list = []
-        #start,end = 0,20
-        #if FLAGS.num_aspects == 20:
-            #start = 1
-            #end = 21
-        #elif FLAGS.num_aspects == 21:
-            #start = 0
-            #end = 21
         for i in range(1,FLAGS.num_aspects+1):
             label_list.append(FLAGS.tag_flag+str(i))#在这里添加标签
         self.label_list = label_list
@@ -759,7 +741,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
             example[name] = t
         return example
 
-    def input_fn(params):#回调函数，已经写死
+    def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
         tf.logging.info("batch_size 888: %s" % batch_size)
@@ -912,7 +894,9 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
     # with tf.name_scope("score_cnn"):
     #     logits_cnn = tf.layers.dense(h_drop, num_labels, name='h_drop_cnn')##相当于reshape
     # tf.logging.info('CNN_drop后的大小: %s' % logits_cnn.shape)
-
+    
+    
+    #  这里是后期加的第二种特征抽取的方式，采用Attention操作
     with tf.name_scope("rnn_attention"):
         hidden_size = bert_output.shape[2].value  # D value - hidden size of the RNN layer
         
@@ -974,7 +958,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
     # hidden_size = embedded.shape[-1].value#[32,128,768]
     # tf.logging.info("output_layer:%s" % embedded.shape)
 
-    #添加lstm层
+    #尝试使用添加lstm层，不如CNN效果好
     # from bert_base.train.lstm_crf_layer import BLSTM_CRF
     # from tensorflow.contrib.layers.python.layers import initializers
     # used = tf.sign(tf.abs(input_ids))
@@ -1086,7 +1070,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                             #train_op=train_op,
                             #training_hooks=[logging_hook],
                             #scaffold_fn=scaffold_fn)
-            #以下为尝试改成GPU训练：
             output_spec = tf.estimator.EstimatorSpec(
                             mode=mode,
                             loss=total_loss,
@@ -1117,7 +1100,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                   #loss=total_loss,
                   #eval_metrics=eval_metrics,
                   #scaffold_fn=scaffold_fn)
-            #以下为尝试改成GPU训练
             output_spec = tf.estimator.EstimatorSpec(
                   mode=mode,
                   loss=total_loss,
@@ -1168,7 +1150,7 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder):
                     dtype=tf.int32),
             "label_ids":
                 tf.constant(all_label_ids, shape=[num_examples,FLAGS.num_aspects], dtype=tf.int32),
-        })#-----------------------修改地方添加标签个数FLAGS.num_aspects-----------------------------
+        })
         if is_training:
             d = d.repeat()
             d = d.shuffle(buffer_size=100)
@@ -1214,7 +1196,7 @@ def main(_):
         raise ValueError(
                 "At least one of `do_train`, `do_eval` or `do_predict' must be True.")
 
-    bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)#预训练参数'chinese_L-12_H-768_A-12/bert_config.json'
+    bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)#加载ALBert参数
 
     if FLAGS.max_seq_length > bert_config.max_position_embeddings: 
         raise ValueError(
@@ -1240,19 +1222,7 @@ def main(_):
     if FLAGS.use_tpu and FLAGS.tpu_name:
         tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
                                 FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
-    #TPU版本：
-    #is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
-    #run_config = tf.contrib.tpu.RunConfig(
-                    #cluster=tpu_cluster_resolver,
-                    #master=FLAGS.master,
-                    #session_config=config,
-                    #model_dir=FLAGS.output_dir,
-                    #save_checkpoints_steps=FLAGS.save_checkpoints_steps,
-                    #tpu_config=tf.contrib.tpu.TPUConfig(
-                                #iterations_per_loop=FLAGS.iterations_per_loop,
-                                #num_shards=FLAGS.num_tpu_cores,
-                                #per_host_input_for_training=is_per_host))
-    #GPU版本                            
+                           
     config = tf.ConfigProto(gpu_options={"allow_growth":True,"per_process_gpu_memory_fraction":1},
                             allow_soft_placement=True,log_device_placement=True)
                             
@@ -1272,90 +1242,66 @@ def main(_):
         #标签和数据可以用train_examples[索引].label或者train_examples[索引].text_a表示  textb=None
 
     if FLAGS.do_train:
-        #train_examples = processor.get_train_examples(FLAGS.data_dir)
         num_train_steps = int(
             len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)#  sentences/batch * 10epochs=steps,
-        num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)   #  预热学习步数
+        num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)   # 预热学习步数
 
     model_fn = model_fn_builder(
                 bert_config=bert_config,
                 num_labels=len(label_list),
-                init_checkpoint=FLAGS.init_checkpoint, # 初始化预训练模型'chinese_L-12_H-768_A-12/bert_model.ckpt'
+                init_checkpoint=FLAGS.init_checkpoint, # 初始化预训练模型'albert_model.ckpt'
                 learning_rate=FLAGS.learning_rate,
                 num_train_steps=num_train_steps,
                 num_warmup_steps=num_warmup_steps,
                 use_tpu=FLAGS.use_tpu,
                 use_one_hot_embeddings=FLAGS.use_tpu)
 
-    # If TPU is not available, this will fall back to normal Estimator on CPU
-    # or GPU.
     estimator = tf.estimator.Estimator(              
                 model_fn=model_fn,
                 config=run_config,
                 params={"batch_size":FLAGS.train_batch_size,
                 "eval_batch_size":FLAGS.eval_batch_size,
                 "predict_batch_size":FLAGS.predict_batch_size})
-
-    if FLAGS.do_train:
-        #train_file = os.path.join(FLAGS.output_dir, "train.tf_record")
-        #file_based_convert_examples_to_features(#执行这个函数，将把数据一句话一句话作为样本，写入tf_record
-            #train_examples, label_list, FLAGS.max_seq_length, tokenizer, train_file)
-        #-------------------------------------------------------------------------------------------------------    
+    # ================================================训练==================================================================
+    if FLAGS.do_train:  
         features_train=file_based_convert_examples_to_features(
                         train_examples, label_list, FLAGS.max_seq_length, tokenizer)
-        #-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^       
+     
         tf.logging.info("***** Running training *****")
         tf.logging.info("  Num examples = %d", len(train_examples))
         tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
         tf.logging.info("  Num steps = %d", num_train_steps)        
-        #train_input_fn = file_based_input_fn_builder(#将tf_record格式的数据读成字典
-            #input_file=train_file,#tf_record文件路径
-            #seq_length=FLAGS.max_seq_length,
-            #is_training=True,
-            #drop_remainder=True)
-        #-----------------------------------------------直接用input_fn------------------------------------------------------
+        
         train_drop_remainder = True if FLAGS.use_tpu else False
         train_input_fn = input_fn_builder(
             features=features_train,
             seq_length=FLAGS.max_seq_length,
             is_training=True,
         drop_remainder=train_drop_remainder)
-        #-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
-        estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)#必将先回调file_based_input_fn_builder中的input_fn，得到数据,
-        #然后回调model_fn加载模型，estimator是tf.contrib.tpu.TPUEstimator的初始化对象，tf.contrib.tpu.TPUEstimator的train方法回调用初始化时
-        #传入的模型函数model_fn
-
+        
+        estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+        #回调file_based_input_fn_builder中的input_fn，得到数据,
+        #然后回调model_fn加载模型，estimator是tf.contrib.tpu.TPUEstimator的初始化对象，
+        #tf.contrib.tpu.TPUEstimator的train方法回调用初始化时传入的模型函数model_fn
+    # =================================================验证=============================================================
     if FLAGS.do_eval:
-        #eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
-        #----------------------------------------------修改----------------------------------------------------------
         features_eval=file_based_convert_examples_to_features(
             eval_examples, label_list, FLAGS.max_seq_length, tokenizer)
-        #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         tf.logging.info("***** Running evaluation *****")
         tf.logging.info("  Num examples = %d", len(eval_examples))
         tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
 
-        # This tells the estimator to run through the entire set.
         eval_steps = None
-        # However, if running eval on the TPU, you will need to specify the
-        # number of steps.
-        # if FLAGS.use_tpu:
-            # Eval will be slightly WRONG on the TPU because it will truncate
-            # the last batch.
+       
         eval_steps = int(len(eval_examples) / FLAGS.eval_batch_size)
 
         eval_drop_remainder = True if FLAGS.use_tpu else False
-        #eval_input_fn = file_based_input_fn_builder(
-            #input_file=eval_file,
-            #seq_length=FLAGS.max_seq_length,
-            #is_training=False,
-            #drop_remainder=eval_drop_remainder)
-        #--------------------------------------------------以下为修改---------------------------------------------
+
         eval_input_fn = input_fn_builder(
             features=features_eval,
             seq_length=FLAGS.max_seq_length,
             is_training=False,drop_remainder=eval_drop_remainder)
-        #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        
         result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
 
         output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
@@ -1364,7 +1310,7 @@ def main(_):
             for key in sorted(result.keys()):
                 tf.logging.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
-
+    # ==============================================推理/预测=================================================================
     if FLAGS.do_predict:
         output_predict_file = os.path.join(FLAGS.output_dir, "test_results_all_data.tsv")
         with open(os.path.join(FLAGS.data_dir,FLAGS.test_data_file), 'r', encoding='utf-8') as inf, open(os.path.join(FLAGS.output_dir,str(FLAGS.num_aspects)+"_"+FLAGS.tag_flag+"_"+str(FLAGS.rs_flag)+"_test_output.json"), 'w', encoding='utf-8') as outf, tf.gfile.GFile(output_predict_file, "w") as writer:
@@ -1385,18 +1331,13 @@ def main(_):
             tf.logging.info("***** Running prediction*****")
             tf.logging.info("  Num examples = %d", len(predict_examples))
             tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
-
-            if FLAGS.use_tpu:
-                # Warning: According to tpu_estimator.py Prediction on TPU is an
-                # experimental feature and hence not supported here
-                raise ValueError("Prediction in TPU not supported")
-            #----------------------------------------------------以下为修改------------------------------------------------
+                
             predict_drop_remainder = True if FLAGS.use_tpu else False
             predict_input_fn = input_fn_builder(
                 features=features_predict,
                 seq_length=FLAGS.max_seq_length,
                 is_training=False,drop_remainder=predict_drop_remainder)
-            #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       
             result = estimator.predict(input_fn=predict_input_fn)
             predict_doc = []
             for i, prediction in enumerate(result):
@@ -1409,7 +1350,7 @@ def main(_):
                 temp = []
                 for j, rs in enumerate(prediction):
                     if rs > FLAGS.rs_flag:
-                        if FLAGS.num_aspects == 20:
+                        if FLAGS.num_aspects == 20: # 这里需要替换成标签个数
                             temp.append(FLAGS.tag_flag + str(j+1))
                         elif FLAGS.num_aspects == 21:
                             temp.append(FLAGS.tag_flag + str(j))
