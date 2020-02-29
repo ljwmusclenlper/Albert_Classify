@@ -9,7 +9,6 @@ import collections
 import csv
 import os
 import json
-#import bert_modeling as modeling
 import albert_modeling as modeling
 import optimization
 import tokenization
