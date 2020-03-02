@@ -4,7 +4,7 @@
   **(Ps:研究所的文献情报中心项目，也非盈利目的，所以将模型放了出来，引用请注明出处，欢迎Star! ^&^ )
    ### Res_Se_CNN模块是自己设计的Text_CNN语义抽取模块，在豆瓣电影简介-类型多分类任务中AUC值达到0.89
 * 架构图：
-![](Albert.png)
+![](https://github.com/ljwmusclenlper/Albert_Classify/blob/master/Albert.png)
 * 另外我在这里上传了我在豆瓣网爬取的9500条电影简介，以及对应所属的35种类别标签,模型的长文本分类效果特别好，AUC达到了0.89
 >示例：
 >>{"labels": ["动作", "科幻", "恐怖"], 
